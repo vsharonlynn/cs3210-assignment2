@@ -1,0 +1,3 @@
+mpirun --rankfile rankfile.lab --machinefile machinefile.lab -np 8 ./SETL_par ./Data/random3000.w 50 ./Data/glider3.p > parallel-i7-8-processors.out
+
+mpirun --rankfile rankfile.lab --machinefile machinefile.lab -np 12 ./SETL_par ./Data/random3000.w 50 ./Data/glider3.p > parallel-3-nodes.out

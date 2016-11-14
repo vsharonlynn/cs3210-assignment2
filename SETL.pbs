@@ -1,0 +1,11 @@
+#!/bin/bash
+#PBS -q normal
+#PBS -l select=1:ncpus=24:mpiprocs=24
+#PBS -l place=scatter
+
+cd #{PBS_O_WORKDIR}
+
+module load intelcc
+module load intelmpi
+
+mpirun -np 24 ~/CS3210-Assignment2-master/SETL_par ~/CS3210-Assignment2-master/Data/random3000.w 100 ~/CS3210-Assignment2-master/Data/glider3.p

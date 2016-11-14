@@ -1,0 +1,1 @@
+all:    mpicc SETL_par.c -lm -o SETL_par
