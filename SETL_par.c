@@ -41,7 +41,7 @@ char** readWorldFromFile( char* fname, int* size );
 
 int countNeighbours(char** world, int row, int col);
 
-void evolveWorld(char** curWorld, char** nextWorld, int size, int iter, MPI_Comm cartesian_comm);
+void evolveWorld(char** currWorld, char** nextWorld, int size, int iter, MPI_Comm cartesian_comm);
 
 
 /***********************************************************
@@ -97,14 +97,14 @@ void searchSinglePattern(char** world, int wSize, int interation,
    Cartesian block-wise related definitions
 ***********************************************************/
 
-#define UP    0
-#define DOWN  1
+#define TOP    0
+#define BOTTOM  1
 #define LEFT  2
 #define RIGHT 3
-#define UPLEFT 4
-#define UPRIGHT 5
-#define DOWNLEFT 6
-#define DOWNRIGHT 7
+#define TOPLEFT 4
+#define TOPRIGHT 5
+#define BOTTOMLEFT 6
+#define BOTTOMRIGHT 7
 
 
 /***********************************************************
@@ -122,10 +122,10 @@ int currRowSize, currColSize;
 int cartRank, cartNumtasks;
 int neighbours[8], coordinate[2];
 
-int getCorrespondingEvolverOrFinderRank(int rank);
+int getSisterEvolverRank(int rank);
 int getTag(int iter, int senderRank);
 int getDiagonalCartesianNeighbour(int dir);
-void getWorldFromEvolver(char** curWorld, int size, int iter, int patternSize);
+void getWorldFromEvolver(char** currWorld, int size, int iter, int patternSize);
 void sendWorldToFinder(char ** curW, int size, int iter);
 
 
@@ -199,12 +199,12 @@ int main( int argc, char** argv)
     MPI_Comm_rank(cartesian_communication, &cartRank);
     MPI_Cart_coords(cartesian_communication, cartRank, nDimension, coordinate);
     MPI_Cart_shift(cartesian_communication, 0, 1,
-        &neighbours[UP], &neighbours[DOWN]);
+        &neighbours[TOP], &neighbours[BOTTOM]);
     MPI_Cart_shift(cartesian_communication, 1, 1,
         &neighbours[LEFT], &neighbours[RIGHT]);
 
     // MPI Cart does not support diagonal neighbours.
-    for (iter = UPLEFT; iter <= DOWNRIGHT; iter++) {
+    for (iter = TOPLEFT; iter <= BOTTOMRIGHT; iter++) {
         neighbours[iter] = getDiagonalCartesianNeighbour(iter);
     }
 
@@ -311,7 +311,7 @@ int main( int argc, char** argv)
     }
 
     BASEMATCH* combinedList = (BASEMATCH*)malloc(startOffset * sizeof(BASEMATCH));
-    MPI_Gatherv(listArray, list->nItem, mpi_basic_match_type, combinedList, sizeList, offsetList, mpi_basic_match_type, 0, MPI_COMM_WORLD );
+    MPI_Gatherv(listArray, list->nItem, mpi_basic_match_type, combinedList, sizeList, offsetList, mpi_basic_match_type, 0, MPI_COMM_WORLD);
     qsort(combinedList, startOffset, sizeof(BASEMATCH), compareBaseMatch);
     if (rank == 0) {
         printf("List size = %d\n", startOffset);
@@ -478,223 +478,210 @@ int countNeighbours(char** world, int row, int col)
 
 }
 
-void evolveWorld(char** curWorld, char** nextWorld,
+void evolveWorld(char** currWorld, char** nextWorld,
     int size, int iter, MPI_Comm cartesian_comm)
 {
     int i, j, liveNeighbours;
 
     char* nextTopRow = (char*)malloc(sizeof(char) * currColSize);
-    char* nextBotRow = (char*)malloc(sizeof(char) * currColSize);
+    char* nextBottomRow = (char*)malloc(sizeof(char) * currColSize);
     char* nextLeftCol = (char*)malloc(sizeof(char) * currRowSize);
     char* nextRightCol = (char*)malloc(sizeof(char) * currRowSize);
-    char nextLeftTop, nextRightTop, nextLeftBot, nextRightBot;
+    char nextTopLeftCorner, nextTopRightCorner, nextBottomLeftCorner, nextBottomRightCorner;
+
     MPI_Request* cartRequest = (MPI_Request*)malloc(sizeof(MPI_Request) * 16);
     MPI_Status* status = (MPI_Status*)malloc(sizeof(MPI_Status) * 16);
 
     if (iter > 0) {
         char* topRow = (char*)malloc(sizeof(char) * currColSize);
-        char* botRow = (char*)malloc(sizeof(char) * currColSize);
+        char* bottomRow = (char*)malloc(sizeof(char) * currColSize);
         char* leftCol = (char*)malloc(sizeof(char) * currRowSize);
         char* rightCol = (char*)malloc(sizeof(char) * currRowSize);
         for (i = rowStart; i <= rowEnd; i++){
-            leftCol[i-rowStart] = curWorld[i][colStart];
-            rightCol[i-rowStart] = curWorld[i][colEnd];
+            leftCol[i-rowStart] = currWorld[i][colStart];
+            rightCol[i-rowStart] = currWorld[i][colEnd];
         }
 
         for (j = colStart; j <= colEnd; j++) {
-            topRow[j-colStart] = curWorld[rowStart][j];
-            botRow[j-colStart] = curWorld[rowEnd][j];
+            topRow[j-colStart] = currWorld[rowStart][j];
+            bottomRow[j-colStart] = currWorld[rowEnd][j];
         }
 
-        for (i = UP; i <= DOWNRIGHT; i++) {
+        for (i = TOP; i <= BOTTOMRIGHT; i++) {
             if (neighbours[i] < 0) {
                 cartRequest[i] = MPI_REQUEST_NULL;
                 cartRequest[i+8] = MPI_REQUEST_NULL;
                 continue;
             }
+
+            char *sendBuf, *recBuf;
+            int transferSize;
             if (i <= RIGHT) {
-                char *sendBuf, *recBuf;
-                int transferSize;
-                switch (i) {
-                    case UP:
-                        sendBuf = topRow;
-                        recBuf = nextTopRow;
-                        transferSize = currColSize;
-                        break;
-                    case DOWN:
-                        sendBuf = botRow;
-                        recBuf = nextBotRow;
-                        transferSize = currColSize;
-                        break;
-                    case LEFT:
-                        sendBuf = leftCol;
-                        recBuf = nextLeftCol;
-                        transferSize = currRowSize;
-                        break;
-                    case RIGHT:
-                        sendBuf = rightCol;
-                        recBuf = nextRightCol;
-                        transferSize = currRowSize;
-                        break;
+                if (i == TOP) {
+                    sendBuf = topRow;
+                    recBuf = nextTopRow;
+                    transferSize = currColSize;
+                } else if (i == BOTTOM) {
+                    sendBuf = bottomRow;
+                    recBuf = nextBottomRow;
+                    transferSize = currColSize;
+                } else if (i == LEFT) {
+                    sendBuf = leftCol;
+                    recBuf = nextLeftCol;
+                    transferSize = currRowSize;
+                } else if (i == RIGHT) {
+                    sendBuf = rightCol;
+                    recBuf = nextRightCol;
+                    transferSize = currRowSize;
                 }
-
-
-                MPI_Isend(sendBuf, transferSize, MPI_CHAR, neighbours[i], getTag(iter, rank), cartesian_comm, &cartRequest[i]);
-
-                MPI_Irecv(recBuf, transferSize, MPI_CHAR, neighbours[i], getTag(iter, neighbours[i]), cartesian_comm, &cartRequest[i + 8]);
             }
             else {
-                char *sendBuf, *recBuf;
-                switch (i) {
-                    case UPLEFT:
-                        sendBuf = &curWorld[rowStart][colStart];
-                        recBuf = &nextLeftTop;
-                        break;
-                    case UPRIGHT:
-                        sendBuf = &curWorld[rowStart][colEnd];
-                        recBuf = &nextRightTop;
-                        break;
-                    case DOWNLEFT:
-                        sendBuf = &curWorld[rowEnd][colStart];
-                        recBuf = &nextLeftBot;
-                        break;
-                    case DOWNRIGHT:
-                        sendBuf = &curWorld[rowEnd][colEnd];
-                        recBuf = &nextRightBot;
-                        break;
+                if (i == TOPLEFT) {
+                    sendBuf = &currWorld[rowStart][colStart];
+                    recBuf = &nextTopLeftCorner;
+                } else if (i == TOPRIGHT) {
+                    sendBuf = &currWorld[rowStart][colEnd];
+                    recBuf = &nextTopRightCorner;
+                } else if (i == BOTTOMLEFT) {
+                    sendBuf = &currWorld[rowEnd][colStart];
+                    recBuf = &nextBottomLeftCorner;
+                } else if (i == BOTTOMRIGHT) {
+                    sendBuf = &currWorld[rowEnd][colEnd];
+                    recBuf = &nextBottomRightCorner;
                 }
-                MPI_Isend(sendBuf, 1, MPI_CHAR, neighbours[i], getTag(iter, rank), cartesian_comm, &cartRequest[i]);
-
-                MPI_Irecv(recBuf, 1, MPI_CHAR, neighbours[i], getTag(iter, neighbours[i]), cartesian_comm, &cartRequest[i + 8]);
+                transferSize = 1;
             }
+            MPI_Irecv(recBuf, transferSize, MPI_CHAR, neighbours[i], getTag(iter, neighbours[i]), cartesian_comm, &cartRequest[i + 8]);
+            MPI_Isend(sendBuf, transferSize, MPI_CHAR, neighbours[i], getTag(iter, rank), cartesian_comm, &cartRequest[i]);
         }
 
         free(topRow);
-        free(botRow);
+        free(bottomRow);
         free(leftCol);
         free(rightCol);
     }
 
     for (i = rowStart; i <= rowEnd; i++){
         for (j = colStart; j <= colEnd; j++){
-            liveNeighbours = countNeighbours(curWorld, i, j);
+            liveNeighbours = countNeighbours(currWorld, i, j);
             nextWorld[i][j] = DEAD;
 
-            if (curWorld[i][j] == ALIVE) {
-
-                if (liveNeighbours == 2 || liveNeighbours == 3)
+            if (currWorld[i][j] == ALIVE) {
+                if (liveNeighbours == 2 || liveNeighbours == 3) {
                     nextWorld[i][j] = ALIVE;
-
-            } else if (liveNeighbours == 3)
-                    nextWorld[i][j] = ALIVE;
+                }
+            } else if (liveNeighbours == 3) {
+                nextWorld[i][j] = ALIVE;
+            }
         }
     }
 
     if (iter > 0) {
         MPI_Waitall(16, cartRequest, status);
 
-        if (neighbours[UPLEFT] >= 0) {
-            curWorld[rowStart-1][colStart-1] = nextLeftTop;
-        }
-
-        if (neighbours[UPRIGHT] >= 0){
-            curWorld[rowStart-1][colEnd+1] = nextRightTop;
-        }
-
-        if (neighbours[DOWNLEFT] >= 0){
-            curWorld[rowEnd+1][colStart-1] = nextLeftBot;
-        }
-
-        if (neighbours[DOWNRIGHT] >= 0){
-            curWorld[rowEnd+1][colEnd+1] = nextRightBot;
-        }
-
-        if (neighbours[UP] >= 0) {
+        if (neighbours[TOP] >= 0) {
             for(i = colStart; i <= colEnd; i++) {
-                curWorld[rowStart-1][i] = nextTopRow[i - colStart];
+                currWorld[rowStart-1][i] = nextTopRow[i - colStart];
             }
         }
 
-        if (neighbours[DOWN] >= 0) {
+        if (neighbours[BOTTOM] >= 0) {
             for(i = colStart; i <= colEnd; i++) {
-                curWorld[rowEnd+1][i] = nextBotRow[i - colStart];
+                currWorld[rowEnd+1][i] = nextBottomRow[i - colStart];
             }
         }
 
         if (neighbours[LEFT] >= 0) {
             for(i = rowStart; i <= rowEnd; i++) {
-                curWorld[i][colStart-1] = nextLeftCol[i - rowStart];
+                currWorld[i][colStart-1] = nextLeftCol[i - rowStart];
             }
         }
 
         if (neighbours[RIGHT] >= 0) {
             for(i = rowStart; i <= rowEnd; i++) {
-                curWorld[i][colEnd+1] = nextRightCol[i - rowStart];
+                currWorld[i][colEnd+1] = nextRightCol[i - rowStart];
             }
         }
 
+        if (neighbours[TOPLEFT] >= 0) {
+            currWorld[rowStart-1][colStart-1] = nextTopLeftCorner;
+        }
+
+        if (neighbours[TOPRIGHT] >= 0){
+            currWorld[rowStart-1][colEnd+1] = nextTopRightCorner;
+        }
+
+        if (neighbours[BOTTOMLEFT] >= 0){
+            currWorld[rowEnd+1][colStart-1] = nextBottomLeftCorner;
+        }
+
+        if (neighbours[BOTTOMRIGHT] >= 0){
+            currWorld[rowEnd+1][colEnd+1] = nextBottomRightCorner;
+        }
+
         for(i = rowStart; i <= rowEnd; i++) {
-            liveNeighbours = countNeighbours(curWorld, i, colStart);
+            liveNeighbours = countNeighbours(currWorld, i, colStart);
             nextWorld[i][colStart] = DEAD;
 
-            if (curWorld[i][colStart] == ALIVE) {
-
-                if (liveNeighbours == 2 || liveNeighbours == 3)
+            if (currWorld[i][colStart] == ALIVE) {
+                if (liveNeighbours == 2 || liveNeighbours == 3) {
                     nextWorld[i][colStart] = ALIVE;
+                }
+            } else if (liveNeighbours == 3) {
+                nextWorld[i][colStart] = ALIVE;
+            }
 
-            } else if (liveNeighbours == 3)
-                    nextWorld[i][colStart] = ALIVE;
-
-            liveNeighbours = countNeighbours(curWorld, i, colEnd);
+            liveNeighbours = countNeighbours(currWorld, i, colEnd);
             nextWorld[i][colEnd] = DEAD;
 
-            if (curWorld[i][colEnd] == ALIVE) {
-
-                if (liveNeighbours == 2 || liveNeighbours == 3)
+            if (currWorld[i][colEnd] == ALIVE) {
+                if (liveNeighbours == 2 || liveNeighbours == 3) {
                     nextWorld[i][colEnd] = ALIVE;
-
-            } else if (liveNeighbours == 3)
-                    nextWorld[i][colEnd] = ALIVE;
+                }
+            } else if (liveNeighbours == 3) {
+                nextWorld[i][colEnd] = ALIVE;
+            }
         }
 
         for(i = colStart; i <= colEnd; i++) {
-            liveNeighbours = countNeighbours(curWorld, rowStart, i);
+            liveNeighbours = countNeighbours(currWorld, rowStart, i);
             nextWorld[rowStart][i] = DEAD;
 
-            if (curWorld[rowStart][i] == ALIVE) {
-
-                if (liveNeighbours == 2 || liveNeighbours == 3)
+            if (currWorld[rowStart][i] == ALIVE) {
+                if (liveNeighbours == 2 || liveNeighbours == 3) {
                     nextWorld[rowStart][i] = ALIVE;
+                }
+            } else if (liveNeighbours == 3) {
+                nextWorld[rowStart][i] = ALIVE;
+            }
 
-            } else if (liveNeighbours == 3)
-                    nextWorld[rowStart][i] = ALIVE;
-
-            liveNeighbours = countNeighbours(curWorld, rowEnd, i);
+            liveNeighbours = countNeighbours(currWorld, rowEnd, i);
             nextWorld[rowEnd][i] = DEAD;
 
-            if (curWorld[rowEnd][i] == ALIVE) {
-
-                if (liveNeighbours == 2 || liveNeighbours == 3)
+            if (currWorld[rowEnd][i] == ALIVE) {
+                if (liveNeighbours == 2 || liveNeighbours == 3) {
                     nextWorld[rowEnd][i] = ALIVE;
-
-            } else if (liveNeighbours == 3)
-                    nextWorld[rowEnd][i] = ALIVE;
+                }
+            } else if (liveNeighbours == 3) {
+                nextWorld[rowEnd][i] = ALIVE;
+            }
         }
     }
 
     free(nextTopRow);
-    free(nextBotRow);
+    free(nextBottomRow);
     free(nextLeftCol);
     free(nextRightCol);
     free(cartRequest);
     free(status);
 }
 
+
 /***********************************************************
    Parallel related functions
 ***********************************************************/
 
-int getCorrespondingEvolverOrFinderRank(int rank) {
+int getSisterEvolverRank(int rank) {
     if (rank < numtasks/2) {
         return rank + evolverProcessors;
     }
@@ -710,66 +697,78 @@ int getTag(int iter, int senderRank) {
     return iter * rowCount * colCount + rowCount * (senderRank / colCount) + (senderRank % colCount);
 }
 
+/*
+ * MPI Cart does not support diagonal neighbours. Thus, process manually.
+ */
 int getDiagonalCartesianNeighbour(int dir) {
-    switch (dir) {
-        case UPLEFT:
-            if (coordinate[0] > 0 && coordinate[1] > 0) {
-                return cartRank - colCount - 1;
-            }
-            else {
-                return -1;
-            }
-            break;
-        case UPRIGHT:
-            if (coordinate[0] > 0 && coordinate[1] < colCount - 1) {
-                return cartRank - colCount + 1;
-            }
-            else {
-                return -1;
-            }
-            break;
-        case DOWNLEFT:
-            if (coordinate[0] < rowCount - 1 && coordinate[1] > 0) {
-                return cartRank + colCount - 1;
-            }
-            else {
-                return -1;
-            }
-            break;
-        case DOWNRIGHT:
-            if (coordinate[0] < rowCount - 1 && coordinate[1] < colCount - 1) {
-                return cartRank + colCount + 1;
-            }
-            else {
-                return -1;
-            }
-            break;
+    if (dir == TOPLEFT) {
+        if (coordinate[0] > 0 && coordinate[1] > 0) {
+            return cartRank - colCount - 1;
+        } else {
+            return -1;
+        }
+    } else if (dir == TOPRIGHT) {
+        if (coordinate[0] > 0 && coordinate[1] < colCount - 1) {
+            return cartRank - colCount + 1;
+        } else {
+            return -1;
+        }
+    } else if (dir == BOTTOMLEFT) {
+        if (coordinate[0] < rowCount - 1 && coordinate[1] > 0) {
+            return cartRank + colCount - 1;
+        } else {
+            return -1;
+        }
+    } else if (dir == BOTTOMRIGHT) {
+        if (coordinate[0] < rowCount - 1 && coordinate[1] < colCount - 1) {
+            return cartRank + colCount + 1;
+        } else {
+            return -1;
+        }
     }
     return -1;
 }
 
+/*
+ * Send data from evolver process to corresponding finder process.
+ * Paired with getWorldFromEvolver.
+ */
 void sendWorldToFinder(char ** curW, int size, int iter) {
-    int i, j;
     MPI_Request req[4];
-    MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, getCorrespondingEvolverOrFinderRank(rank), iter, MPI_COMM_WORLD, &req[0]);
 
+    int sisterRank = getSisterEvolverRank(rank);
+    MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR,
+        sisterRank, iter, MPI_COMM_WORLD, &req[0]);
+
+    int sisterLeftRank = getSisterEvolverRank(rank);
     if (neighbours[LEFT] >= 0) {
-        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, getCorrespondingEvolverOrFinderRank(neighbours[LEFT]), iter, MPI_COMM_WORLD, &req[1]);
+        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR,
+            sisterLeftRank, iter, MPI_COMM_WORLD, &req[1]);
     }
 
-    if (neighbours[UP] >= 0) {
-        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, getCorrespondingEvolverOrFinderRank(neighbours[UP]), iter, MPI_COMM_WORLD, &req[2]);
+    int sisterUpRank = getSisterEvolverRank(neighbours[TOP]);
+    if (neighbours[TOP] >= 0) {
+        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR,
+            sisterUpRank, iter, MPI_COMM_WORLD, &req[2]);
     }
 
-    if (neighbours[UPLEFT] >= 0) {
-        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, getCorrespondingEvolverOrFinderRank(neighbours[UPLEFT]), iter, MPI_COMM_WORLD, &req[3]);
+    int sisterUpLeftRank = getSisterEvolverRank(neighbours[TOPLEFT]);
+    if (neighbours[TOPLEFT] >= 0) {
+        MPI_Isend(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR,
+            sisterUpLeftRank, iter, MPI_COMM_WORLD, &req[3]);
     }
 }
 
+/*
+ * Receive data from corresponding evolver process for a particular
+ * finder process.
+ * Paired with sendWorldToFinder.
+ */
 void getWorldFromEvolver(char** curW, int size, int iter, int patternSize) {
     int i, j;
     MPI_Request req[4];
-    MPI_Irecv(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, getCorrespondingEvolverOrFinderRank(rank), iter, MPI_COMM_WORLD, &req[0]);
+
+    MPI_Irecv(&(curW[0][0]), (size+2)*(size+2), MPI_CHAR, cartRank, iter, MPI_COMM_WORLD, &req[0]);
 
     char **rightWorld = allocateSquareMatrix( size + 2, DEAD ), **botWorld = allocateSquareMatrix( size + 2, DEAD ), **rightBotWorld = allocateSquareMatrix( size + 2, DEAD );
 
@@ -780,15 +779,15 @@ void getWorldFromEvolver(char** curW, int size, int iter, int patternSize) {
         req[1] = MPI_REQUEST_NULL;
     }
 
-    if (neighbours[DOWN] >= 0) {
-        MPI_Irecv(&(botWorld[0][0]), (size+2)*(size+2), MPI_CHAR, neighbours[DOWN], iter, MPI_COMM_WORLD, &req[2]);
+    if (neighbours[BOTTOM] >= 0) {
+        MPI_Irecv(&(botWorld[0][0]), (size+2)*(size+2), MPI_CHAR, neighbours[BOTTOM], iter, MPI_COMM_WORLD, &req[2]);
     }
     else {
         req[2] = MPI_REQUEST_NULL;
     }
 
-    if (neighbours[DOWNRIGHT] >= 0) {
-        MPI_Irecv(&(rightBotWorld[0][0]), (size+2)*(size+2), MPI_CHAR, neighbours[DOWNRIGHT], iter, MPI_COMM_WORLD, &req[3]);
+    if (neighbours[BOTTOMRIGHT] >= 0) {
+        MPI_Irecv(&(rightBotWorld[0][0]), (size+2)*(size+2), MPI_CHAR, neighbours[BOTTOMRIGHT], iter, MPI_COMM_WORLD, &req[3]);
     }
     else {
         req[3] = MPI_REQUEST_NULL;
@@ -808,7 +807,7 @@ void getWorldFromEvolver(char** curW, int size, int iter, int patternSize) {
         }
     }
 
-    if (neighbours[DOWN] >= 0) {
+    if (neighbours[BOTTOM] >= 0) {
         int nextRowStart = rowEnd + 1;
         int nextColStart = colStart;
         int nextColEnd = colEnd;
@@ -819,7 +818,7 @@ void getWorldFromEvolver(char** curW, int size, int iter, int patternSize) {
         }
     }
 
-    if (neighbours[DOWNRIGHT] >= 0) {
+    if (neighbours[BOTTOMRIGHT] >= 0) {
         int nextRowStart = rowEnd + 1;
         int nextColStart = colEnd + 1;
         for (j = nextRowStart; j <= nextRowStart+patternSize; j++) {
@@ -829,11 +828,11 @@ void getWorldFromEvolver(char** curW, int size, int iter, int patternSize) {
         }
     }
 
-
     freeSquareMatrix(rightWorld);
     freeSquareMatrix(botWorld);
     freeSquareMatrix(rightBotWorld);
 }
+
 
 /***********************************************************
    Search related functions
@@ -850,7 +849,6 @@ char** readPatternFromFile( char* fname, int* sizePtr )
     inf = fopen(fname,"r");
     if (inf == NULL)
         die(__LINE__);
-
 
     fscanf(inf, "%d", &size);
     fscanf(inf, "%c", &temp);
@@ -935,26 +933,19 @@ int compareBaseMatch(const void* a, const void* b) {
     BASEMATCH* elem2 = (BASEMATCH*)b;
     if (elem1->iteration < elem2->iteration) {
         return -1;
-    }
-    else if (elem1->iteration > elem2->iteration) {
+    } else if (elem1->iteration > elem2->iteration) {
         return 1;
-    }
-    else if (elem1->rotation < elem2->rotation) {
+    } else if (elem1->rotation < elem2->rotation) {
         return -1;
-    }
-    else if (elem1->rotation > elem2->rotation){
+    } else if (elem1->rotation > elem2->rotation){
         return 1;
-    }
-    else if (elem1->row < elem2->row) {
+    } else if (elem1->row < elem2->row) {
         return -1;
-    }
-    else if (elem1->row > elem2->row) {
+    } else if (elem1->row > elem2->row) {
         return 1;
-    }
-    else if (elem1->col < elem2->col) {
+    } else if (elem1->col < elem2->col) {
         return -1;
-    }
-    else {
+    } else {
         return 1;
     }
 }
@@ -1014,7 +1005,6 @@ void insertEnd(MATCHLIST* list,
     }
 
     (list->nItem)++;
-
 }
 
 void printList(MATCHLIST* list)
@@ -1023,7 +1013,6 @@ void printList(MATCHLIST* list)
     MATCH* cur;
 
     printf("List size = %d\n", list->nItem);
-
 
     if (list->nItem == 0) return;
 
